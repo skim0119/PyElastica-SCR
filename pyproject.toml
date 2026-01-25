@@ -1,0 +1,112 @@
+[project]
+name = "pyelastica-SCR"
+version = "0.1.0"
+description = "SCR addons for PyElastica."
+readme = "README.md"
+authors = [
+    {name = "Seung Hyun Kim", email = "skim0119@gmail.com"},
+]
+license = "MIT"
+
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+]
+
+requires-python = ">=3.12"
+
+dependencies = [
+    "pyelastica @ git+https://github.com/GazzolaLab/PyElastica.git@update-v1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["elastica-scr"]
+
+[tool.hatch.build.targets.sdist]
+include = ["elastica-scr"]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "pytest",
+    "pytest-rng",
+    "pytest-mock",
+    "mypy",
+    "mypy-extensions",
+    "autoflake",
+    "flake8",
+]
+
+[tool.black]
+# https://github.com/psf/black
+target-version = ["py312"]
+line-length = 88
+color = true
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+    | env
+    | venv
+)/
+'''
+
+[tool.autoflake]
+ignore-init-module-imports = true
+ignore-pass-statements = true
+ignore-pass-after-docstring = true
+
+[tool.pytest.ini_options]
+# https://docs.pytest.org/en/6.2.x/customize.html#pyproject-toml
+# Directories that are not visited by pytest collector:
+norecursedirs = ["hooks", "*.egg", ".eggs", "dist", "build", "docs", ".tox", ".git", "__pycache__"]
+
+[tool.mypy]
+# https://mypy.readthedocs.io/en/latest/config_file.html#using-a-pyproject-toml-file
+python_version = "3.12"
+pretty = true
+show_traceback = true
+color_output = true
+strict = true
+
+allow_redefinition = false
+check_untyped_defs = true
+disallow_any_unimported = true
+disallow_any_generics = false
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+implicit_reexport = true
+no_implicit_optional = true
+show_column_numbers = true
+show_error_codes = true
+show_error_context = true
+strict_equality = true
+strict_optional = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_return_any = false
+warn_unreachable = false
+warn_unused_configs = true
+warn_unused_ignores = false
