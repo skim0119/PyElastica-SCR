@@ -7,7 +7,7 @@ from abc import abstractmethod
 import numpy as np
 from numpy.typing import NDArray
 
-from elastica.systems.protocol import StatidSystemProtocol
+from elastica.systems.protocol import StaticSystemProtocol
 
 
 @runtime_checkable

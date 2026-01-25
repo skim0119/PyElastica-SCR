@@ -1,6 +1,5 @@
 __doc__ = """Rod Implementation"""
 from typing import Any, Optional, Type
-from typing_extensions import Self
 
 from numpy.typing import NDArray
 
@@ -22,11 +21,9 @@ from elastica._calculus import (
     _difference,
     _average,
 )
-from .factory_function import allocate
-from .knot_theory import KnotTheory
 
 from elastica.rod.cosserat_rod import CosseratRod
-from ..so3 import exp_so3
+from .._so3 import exp_so3
 
 
 class StableCosseratRod(CosseratRod):
@@ -36,9 +33,9 @@ class StableCosseratRod(CosseratRod):
 
     def __init__(
         self,
+        *args: Any,
         num_gauss_siedel_iteration: int = 5,
         gauss_siedel_tolerence: float = 1e-6,
-        *args: Any,
         **kwargs: Any,
     ) -> None:
         """

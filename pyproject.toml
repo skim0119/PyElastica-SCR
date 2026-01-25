@@ -1,5 +1,5 @@
 [project]
-name = "pyelastica-SCR"
+name = "PyElastica-SCR"
 version = "0.1.0"
 description = "SCR addons for PyElastica."
 readme = "README.md"
@@ -33,10 +33,10 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["elastica-scr"]
+packages = ["elastica_scr"]
 
 [tool.hatch.build.targets.sdist]
-include = ["elastica-scr"]
+include = ["elastica_scr"]
 
 [project.optional-dependencies]
 dev = [

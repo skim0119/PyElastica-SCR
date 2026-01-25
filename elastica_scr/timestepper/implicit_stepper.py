@@ -13,7 +13,7 @@ from elastica.typing import (
 
 import numpy as np
 
-from ..systems.protocol import ImplicitsystemProtocol
+from ..systems.protocol import ImplicitSystemProtocol
 
 
 class SCRFirstOrderImplicit:
@@ -90,7 +90,7 @@ class SCRFirstOrderImplicit:
 
     def step_single_instance(
         self,
-        System: ImplicitSystemType,
+        system: ImplicitSystemProtocol,
         time: np.float64,
         dt: np.float64,
     ) -> np.float64:
@@ -99,7 +99,7 @@ class SCRFirstOrderImplicit:
         """
 
         # Quasi-static orientation solve
-        residual = system.update_orientation(
+        orientation_residual = system.update_orientation(
             director,
             kappa,
             sigma,
@@ -111,11 +111,11 @@ class SCRFirstOrderImplicit:
             shear_matrix,
             bend_matrix,
         )
-        self.info["orientation_residual"] = residual
+        self.info["orientation_residual"] = orientation_residual
 
         # Implicit position solve
-        residual = system.update_position()
-        self.info["position_residual"] = residual
+        position_residual = system.update_position()
+        self.info["position_residual"] = position_residual
 
         # Velocity update
         system.update_velocity()
