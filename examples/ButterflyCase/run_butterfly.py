@@ -15,7 +15,7 @@ n_elem += n_elem % 2
 half_n_elem = n_elem // 2
 
 origin = np.zeros((3, 1))
-angle_of_inclination = np.deg2rad(45.0)
+angle_of_inclination = np.deg2rad(15.0)
 
 # in-plane
 horizontal_direction = np.array([0.0, 0.0, 1.0]).reshape(-1, 1)
@@ -47,7 +47,7 @@ positions[..., half_n_elem:] = positions[
     - np.sin(angle_of_inclination) * vertical_direction
 )
 
-butterfly_rod = es.Stable_CosseratRod.straight_rod(
+butterfly_rod = es.StableCosseratRod.straight_rod(
     n_elem,
     start=origin.reshape(3),
     direction=np.array([0.0, 0.0, 1.0]),
@@ -90,6 +90,7 @@ dt = 0.01 * dl
 total_steps = int(final_time / dt)
 print("Total steps", total_steps)
 dt = final_time / total_steps
+print(f"{dt=}")
 record_every = 100
 for current_step in tqdm(range(total_steps)):
     time = timestepper.step_single_instance(butterfly_rod, time, dt)
@@ -124,11 +125,11 @@ re = np.asarray(recorded_history["re"])
 be = np.asarray(recorded_history["be"])
 se = np.asarray(recorded_history["se"])
 
-energy_ax.plot(times, te, c=to_rgb("xkcd:reddish"), lw=2.0, label="Translational")
-energy_ax.plot(times, re, c=to_rgb("xkcd:bluish"), lw=2.0, label="Rotation")
-energy_ax.plot(times, be, c=to_rgb("xkcd:burple"), lw=2.0, label="Bend")
-energy_ax.plot(times, se, c=to_rgb("xkcd:goldenrod"), lw=2.0, label="Shear")
-energy_ax.plot(times, te + re + be + se, c="k", lw=2.0, label="Total energy")
+energy_ax.plot(times, te, c=to_rgb("xkcd:reddish"), lw=1.0, label="Translational")
+energy_ax.plot(times, re, c=to_rgb("xkcd:bluish"), lw=1.0, label="Rotation")
+energy_ax.plot(times, be, c=to_rgb("xkcd:burple"), lw=1.0, label="Bend")
+energy_ax.plot(times, se, c=to_rgb("xkcd:goldenrod"), lw=1.0, label="Shear")
+energy_ax.plot(times, te + re + be + se, c="k", lw=1.0, label="Total energy")
 energy_ax.legend()
 plt.savefig("energy.png", dpi=300)
 plt.close("all")

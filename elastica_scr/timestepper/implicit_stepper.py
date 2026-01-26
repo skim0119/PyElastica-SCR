@@ -98,26 +98,15 @@ class SCRFirstOrderImplicit:
         (The function is used for single system instance, mainly for testing purposes.)
         """
 
+        # Update geometry
+        system.update_geometry()
+
         # Quasi-static orientation solve
-        orientation_residual = system.update_orientation(
-            director,
-            kappa,
-            sigma,
-            tangent,
-            voronoi_length,
-            voronoi_dilatation,
-            dilatation,
-            external_couple,
-            shear_matrix,
-            bend_matrix,
-        )
-        self.info["orientation_residual"] = orientation_residual
+        orientation_residual = system.update_orientation(time)
+        self.info["orientation_residual"] = np.array(orientation_residual)
 
-        # Implicit position solve
-        position_residual = system.update_position()
+        # Implicit position and velocity
+        position_residual = system.update_position_and_velocity(time, dt)
         self.info["position_residual"] = position_residual
-
-        # Velocity update
-        system.update_velocity()
 
         return time + dt
