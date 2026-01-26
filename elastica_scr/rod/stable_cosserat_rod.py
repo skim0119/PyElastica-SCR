@@ -23,7 +23,7 @@ from elastica._calculus import (
 )
 
 from elastica.rod.cosserat_rod import CosseratRod
-from .._so3 import exp_so3
+from .._so3 import exp_so3, hat
 
 
 class StableCosseratRod(CosseratRod):
@@ -34,7 +34,7 @@ class StableCosseratRod(CosseratRod):
     def __init__(
         self,
         *args: Any,
-        num_gauss_siedel_iteration: int = 5,
+        num_gauss_siedel_iteration: int = 500,
         gauss_siedel_tolerence: float = 1e-6,
         **kwargs: Any,
     ) -> None:
@@ -130,156 +130,219 @@ class StableCosseratRod(CosseratRod):
             self.dilatation,
         )
 
+    def update_geometry(self, time: np.flaot64 | None = None):
+        _update_geometry(
+            self.position_collection,
+            self.volume,
+            self.lengths,
+            self.tangents,
+            self.radius,
+            self.dilatation,
+            self.rest_lengths,
+            self.rest_voronoi_lengths,
+            self.voronoi_dilatation,
+        )
+
+    def update_orientation(
+        self, time: np.float64, dt: np.float64 | None = None
+    ) -> list[float]:
+        """
+        orientation is treated as quasi-static. dt should not matter
+        """
+        # Previous residual calculation
+        new_dmds, T = _compute_internal_torques(
+            self.position_collection,
+            self.velocity_collection,
+            self.tangents,
+            self.lengths,
+            self.rest_lengths,
+            self.director_collection,
+            self.rest_voronoi_lengths,
+            self.bend_matrix,
+            self.rest_kappa,
+            self.kappa,
+            self.voronoi_dilatation,
+            self.mass_second_moment_of_inertia,
+            self.omega_collection,
+            self.internal_stress,
+            self.internal_couple,
+            self.dilatation,
+            self.dilatation_rate,
+            self.internal_torques,
+            self.ghost_voronoi_idx,
+        )
+        prev_value = np.linalg.norm(self.internal_torques, axis=0).mean()
+
+        delh = np.zeros((self.n_elems, self.n_elems - 1))
+        np.fill_diagonal(delh, 1)
+        np.fill_diagonal(delh[1:], -1)
+        delh_kron = np.zeros((self.n_elems * 3, (self.n_elems - 1) * 3))
+        delh_kron[0::3, 0::3] = delh
+        delh_kron[1::3, 1::3] = delh
+        delh_kron[2::3, 2::3] = delh
+        Ah = np.zeros((self.n_elems, self.n_elems - 1))
+        np.fill_diagonal(Ah, 0.5)
+        np.fill_diagonal(Ah[1:], 0.5)
+        Ah_kron = np.zeros((self.n_elems * 3, (self.n_elems - 1) * 3))
+        Ah_kron[0::3, 0::3] = Ah
+        Ah_kron[1::3, 1::3] = Ah
+        Ah_kron[2::3, 2::3] = Ah
+
+        e3 = 1.0 / self.voronoi_dilatation**3
+        e3_kron = np.repeat(e3, 3)
+        de3 = self.rest_voronoi_lengths * e3
+        de3_kron = np.repeat(de3, 3)
+
+        kappa_kron = np.zeros(((self.n_elems - 1) * 3, (self.n_elems - 1) * 3))
+        for voro_idx in range(self.n_elems - 1):
+            sidx = 3 * voro_idx
+            kappa_x = hat(self.kappa[:, voro_idx])
+            kappa_kron[sidx : sidx + 3, sidx : sidx + 3] = kappa_x
+
+        A = delh_kron * e3_kron[None, :] + (Ah_kron * de3_kron[None, :]) @ kappa_kron
+        reg = 1e-3
+        y = -(T.T.flatten())  # T shape is (3, N_v), and we want to iterate column-wise
+
+        m_kron, _, _, _ = np.linalg.lstsq(
+            A.T.dot(A) + reg * np.identity(3 * (self.n_elems - 1)), A.T.dot(y)
+        )
+        m = m_kron.reshape(self.n_elems - 1, 3).T
+
+        k = m.copy()
+        k[0, :] /= self.bend_matrix[0, 0, :]
+        k[1, :] /= self.bend_matrix[1, 1, :]
+        k[2, :] /= self.bend_matrix[2, 2, :]
+
+        # Find orientation
+        sor = 0.7
+        old_kappa = np.empty_like(self.kappa)
+        old_director = self.director_collection.copy()
+        for _ in range(50):
+            _compute_bending_twist_strains(
+                old_director,
+                self.rest_voronoi_lengths,
+                old_kappa,
+            )
+
+            axes = difference_kernel_for_block_structure(
+                0.5 * (old_kappa + k), self.ghost_voronoi_idx
+            )
+            for nidx in range(self.n_elems):
+                old_director[:, :, nidx] = (
+                    exp_so3(-sor * axes[:, nidx]) @ old_director[:, :, nidx]
+                )
+
+        kappa_residual = np.linalg.norm(old_kappa - k, axis=0).mean()
+        director_difference = np.linalg.norm(
+            old_director - self.director_collection, ord="fro", axis=(0, 1)
+        ).mean()
+
+        # print(
+        #    f"kappa residual: {kappa_residual:.7f}, dir diff: {director_difference:.7f}"
+        # )
+
+        # Update parameters
+        self.kappa[:] = k
+        self.director_collection[:] = old_director
+        self.internal_couple[:] = m
+
+        # Re-evaluation of internal_torques --> supposedly zero
+        dmds, T = _compute_internal_torques_without_kappa_update(
+            self.position_collection,
+            self.velocity_collection,
+            self.tangents,
+            self.lengths,
+            self.rest_lengths,
+            self.director_collection,
+            self.rest_voronoi_lengths,
+            self.bend_matrix,
+            self.rest_kappa,
+            k,  # self.kappa,
+            self.voronoi_dilatation,
+            self.mass_second_moment_of_inertia,
+            self.omega_collection,
+            self.internal_stress,
+            m,  # self.internal_couple,
+            self.dilatation,
+            self.dilatation_rate,
+            self.internal_torques,
+            self.ghost_voronoi_idx,
+        )
+
+        after_value = np.linalg.norm(self.internal_torques, axis=0).mean()
+        # print(f"{prev_value:.04f} -> {after_value:.04f}")
+
+    def update_position_and_velocity(self, time, dt):
+        delh = np.zeros((self.n_nodes, self.n_elems))
+        np.fill_diagonal(delh, 1)
+        np.fill_diagonal(delh[1:], -1)
+        delh_kron = np.zeros((self.n_nodes * 3, self.n_elems * 3))
+        delh_kron[0::3, 0::3] = delh
+        delh_kron[1::3, 1::3] = delh
+        delh_kron[2::3, 2::3] = delh
+        diff = np.zeros((self.n_elems, self.n_nodes))
+        np.fill_diagonal(diff, -1)
+        np.fill_diagonal(diff[:, 1:], 1)
+        diff_kron = np.zeros((self.n_elems * 3, self.n_nodes * 3))
+        diff_kron[0::3, 0::3] = diff
+        diff_kron[1::3, 1::3] = diff
+        diff_kron[2::3, 2::3] = diff
+        QTS_kron = np.zeros((self.n_elems * 3, self.n_elems * 3))
+        eQ_kron = np.zeros((self.n_elems * 3, self.n_elems * 3))
+        z_kron = np.zeros((self.n_elems * 3))
+        z_kron[2::3] = 1.0
+        for elem_idx in range(self.n_elems):
+            sidx = 3 * elem_idx
+            QTS_kron[sidx : sidx + 3, sidx : sidx + 3] = (
+                self.director_collection[:, :, elem_idx].T
+                @ self.shear_matrix[:, :, elem_idx]
+                / self.dilatation[elem_idx]
+            )
+            eQ_kron[sidx : sidx + 3, sidx : sidx + 3] = (
+                self.director_collection[:, :, elem_idx] * self.dilatation[elem_idx]
+            )
+        reg = 1e-3
+
+        dmdtv = (self.velocity_collection * (self.mass / dt)[None, :]).T.flatten()
+        dmdt2r = (self.position_collection * (self.mass / (dt**2))[None, :]).T.flatten()
+        A = delh_kron @ QTS_kron @ eQ_kron @ diff_kron - np.diag(
+            np.repeat(self.mass / (dt**2), 3)
+        )
+        y = delh_kron @ QTS_kron @ z_kron - dmdtv - dmdt2r
+
+        r_kron, _, _, _ = np.linalg.lstsq(
+            A.T.dot(A) + reg * np.identity(3 * self.n_nodes), A.T.dot(y)
+        )
+        position_new = r_kron.reshape(self.n_nodes, 3).T
+
+        self.velocity_collection[:] = (position_new - self.position_collection) / dt
+        self.position_collection[:] = position_new
+
 
 # Below is the numba-implementation of Cosserat Rod equations. They don't need to be visible by users.
 
 
-def _compute_torque_residual(
-    director,
-    kappa,
-    sigma,
-    tangent,
-    voronoi_length,
-    voronoi_dilatation,
-    dilatation,
-    external_couple,
-    shear_matrix,
-    bend_matrix,
-):
-    N_v = kappa.shape[1]
-    residual = np.zeros((3, N_v))
-
-    # Internal moments m = B * kappa
-    m = np.einsum("ijk,jk->ik", bend_matrix, kappa)
-
-    # Internal forces n = S * sigma
-    n = np.einsum("ijk,jk->ik", shear_matrix, sigma)
-
-    for j in range(N_v):
-        # ---- m_s term (finite difference) ----
-        if j == 0:
-            m_s = (m[:, j + 1] - m[:, j]) / voronoi_length[j]
-        elif j == N_v - 1:
-            m_s = (m[:, j] - m[:, j - 1]) / voronoi_length[j]
-        else:
-            m_s = (m[:, j + 1] - m[:, j - 1]) / (2 * voronoi_length[j])
-
-        # ---- kappa × m ----
-        kappa_cross_m = np.cross(kappa[:, j], m[:, j])
-
-        # ---- nu × n (shear-force coupling) ----
-        # nu ≈ Q^T * (l * t)
-        Q = director[:, :, j]
-        nu = Q.T @ (dilatation[j] * tangent[:, j])
-        nu_cross_n = np.cross(nu, n[:, j])
-
-        # ---- external couple ----
-        C = external_couple[:, j]
-
-        residual[:, j] = m_s + kappa_cross_m + nu_cross_n + C
-
-    return residual
-
-
-def _orientation_relaxation_step(
-    director,
-    kappa,
-    sigma,
-    tangent,
-    voronoi_length,
-    voronoi_dilatation,
-    dilatation,
-    external_couple,
-    shear_matrix,
-    bend_matrix,
-    relaxation=1.0,
-):
-    residual = _compute_torque_residual(
-        director,
-        kappa,
-        sigma,
-        tangent,
-        voronoi_length,
-        voronoi_dilatation,
-        dilatation,
-        external_couple,
-        shear_matrix,
-        bend_matrix,
-    )
-
-    N_v = kappa.shape[1]
-
-    for j in range(N_v):
-        # Effective stiffness (local Hessian approximation)
-        K = bend_matrix[:, :, j]
-
-        # Solve K * delta_theta = -residual
-        try:
-            delta_theta = np.linalg.solve(K, -residual[:, j])
-        except np.linalg.LinAlgError:
-            continue  # skip ill-conditioned case
-
-        delta_theta *= relaxation
-
-        # Lie group update
-        director[:, :, j] = director[:, :, j] @ exp_so3(delta_theta)
-
-    return director
-
-
-def _update_orientation(
-    director,
-    kappa,
-    sigma,
-    tangent,
-    voronoi_length,
-    voronoi_dilatation,
-    dilatation,
-    external_couple,
-    shear_matrix,
-    bend_matrix,
-    max_iters,
-    tol,
-) -> np.float64:
-    for it in range(max_iters):
-        old_director = director.copy()
-
-        director = _orientation_relaxation_step(
-            director,
-            kappa,
-            sigma,
-            tangent,
-            voronoi_length,
-            voronoi_dilatation,
-            dilatation,
-            external_couple,
-            shear_matrix,
-            bend_matrix,
-        )
-
-        diff = np.linalg.norm(director - old_director)
-        if diff < tol:
-            break
-
-    return diff
-
-
 @numba.njit(cache=True)  # type: ignore
-def _compute_geometry_from_state(
+def _update_geometry(
     position_collection: NDArray[np.float64],
     volume: NDArray[np.float64],
     lengths: NDArray[np.float64],
     tangents: NDArray[np.float64],
     radius: NDArray[np.float64],
+    dilatation: NDArray[np.float64],
+    rest_lengths: NDArray[np.float64],
+    rest_voronoi_lengths: NDArray[np.float64],
+    voronoi_dilatation: NDArray[np.float64],
 ) -> None:
     """
     Update <length, tangents, and radius> given <position and volume>.
+    Update <dilatation and voronoi_dilatation>
     """
     # Compute eq (3.3) from 2018 RSOS paper
 
     # Note : we can use the two-point difference kernel, but it needs unnecessary padding
     # and hence will always be slower
-    position_diff = position_difference_kernel(position_collection)
+    position_diff = _difference(position_collection)
     # FIXME: Here 1E-14 is added to fix ghost lengths, which is 0, and causes division by zero error!
     lengths[:] = _batch_norm(position_diff) + 1e-14
     # _reset_scalar_ghost(lengths, ghost_elems_idx, 1.0)
@@ -291,23 +354,6 @@ def _compute_geometry_from_state(
         # resize based on volume conservation
         radius[k] = np.sqrt(volume[k] / lengths[k] / np.pi)
 
-
-@numba.njit(cache=True)  # type: ignore
-def _compute_all_dilatations(
-    position_collection: NDArray[np.float64],
-    volume: NDArray[np.float64],
-    lengths: NDArray[np.float64],
-    tangents: NDArray[np.float64],
-    radius: NDArray[np.float64],
-    dilatation: NDArray[np.float64],
-    rest_lengths: NDArray[np.float64],
-    rest_voronoi_lengths: NDArray[np.float64],
-    voronoi_dilatation: NDArray[np.float64],
-) -> None:
-    """
-    Update <dilatation and voronoi_dilatation>
-    """
-    _compute_geometry_from_state(position_collection, volume, lengths, tangents, radius)
     # Caveat : Needs already set rest_lengths and rest voronoi domain lengths
     # Put in initialization
     for k in range(lengths.shape[0]):
@@ -315,116 +361,11 @@ def _compute_all_dilatations(
 
     # Compute eq (3.4) from 2018 RSOS paper
     # Note : we can use trapezoidal kernel, but it has padding and will be slower
-    voronoi_lengths = position_average(lengths)
+    voronoi_lengths = _average(lengths)
 
     # Compute eq (3.4) from 2018 RSOS paper
     for k in range(voronoi_lengths.shape[0]):
         voronoi_dilatation[k] = voronoi_lengths[k] / rest_voronoi_lengths[k]
-
-
-@numba.njit(cache=True)  # type: ignore
-def _compute_dilatation_rate(
-    position_collection: NDArray[np.float64],
-    velocity_collection: NDArray[np.float64],
-    lengths: NDArray[np.float64],
-    rest_lengths: NDArray[np.float64],
-    dilatation_rate: NDArray[np.float64],
-) -> None:
-    """
-    Update dilatation_rate given position, velocity, length, and rest_length
-    """
-    # self.lengths = l_i = |r^{i+1} - r^{i}|
-    r_dot_v = _batch_dot(position_collection, velocity_collection)
-    r_plus_one_dot_v = _batch_dot(
-        position_collection[..., 1:], velocity_collection[..., :-1]
-    )
-    r_dot_v_plus_one = _batch_dot(
-        position_collection[..., :-1], velocity_collection[..., 1:]
-    )
-
-    blocksize = lengths.shape[0]
-
-    for k in range(blocksize):
-        dilatation_rate[k] = (
-            (r_dot_v[k] + r_dot_v[k + 1] - r_dot_v_plus_one[k] - r_plus_one_dot_v[k])
-            / lengths[k]
-            / rest_lengths[k]
-        )
-
-
-@numba.njit(cache=True)  # type: ignore
-def _compute_shear_stretch_strains(
-    position_collection: NDArray[np.float64],
-    volume: NDArray[np.float64],
-    lengths: NDArray[np.float64],
-    tangents: NDArray[np.float64],
-    radius: NDArray[np.float64],
-    rest_lengths: NDArray[np.float64],
-    rest_voronoi_lengths: NDArray[np.float64],
-    dilatation: NDArray[np.float64],
-    voronoi_dilatation: NDArray[np.float64],
-    director_collection: NDArray[np.float64],
-    sigma: NDArray[np.float64],
-) -> None:
-    """
-    Update <shear/stretch(sigma)> given <dilatation, director, and tangent>.
-    """
-
-    # Quick trick : Instead of evaliation Q(et-d^3), use property that Q*d3 = (0,0,1), a constant
-    _compute_all_dilatations(
-        position_collection,
-        volume,
-        lengths,
-        tangents,
-        radius,
-        dilatation,
-        rest_lengths,
-        rest_voronoi_lengths,
-        voronoi_dilatation,
-    )
-
-    z_vector = np.array([0.0, 0.0, 1.0]).reshape(3, -1)
-    sigma[:] = dilatation * _batch_matvec(director_collection, tangents) - z_vector
-
-
-@numba.njit(cache=True)  # type: ignore
-def _compute_internal_shear_stretch_stresses_from_model(
-    position_collection: NDArray[np.float64],
-    volume: NDArray[np.float64],
-    lengths: NDArray[np.float64],
-    tangents: NDArray[np.float64],
-    radius: NDArray[np.float64],
-    rest_lengths: NDArray[np.float64],
-    rest_voronoi_lengths: NDArray[np.float64],
-    dilatation: NDArray[np.float64],
-    voronoi_dilatation: NDArray[np.float64],
-    director_collection: NDArray[np.float64],
-    sigma: NDArray[np.float64],
-    rest_sigma: NDArray[np.float64],
-    shear_matrix: NDArray[np.float64],
-    internal_stress: NDArray[np.float64],
-) -> None:
-    """
-    Update <internal stress> given <shear matrix, sigma, and rest_sigma>.
-
-    Linear force functional
-    Operates on
-    S : (3,3,n) tensor and sigma (3,n)
-    """
-    _compute_shear_stretch_strains(
-        position_collection,
-        volume,
-        lengths,
-        tangents,
-        radius,
-        rest_lengths,
-        rest_voronoi_lengths,
-        dilatation,
-        voronoi_dilatation,
-        director_collection,
-        sigma,
-    )
-    internal_stress[:] = _batch_matvec(shear_matrix, sigma - rest_sigma)
 
 
 @numba.njit(cache=True)  # type: ignore
@@ -494,26 +435,20 @@ def _compute_internal_forces(
 ) -> None:
     """
     Update <internal force> given <director, internal_stress and velocity>.
+    Update <shear/stretch(sigma)> given <dilatation, director, and tangent>.
+    Update <internal stress> given <shear matrix, sigma, and rest_sigma>.
+
+    Linear force functional
+    Operates on
+    S : (3,3,n) tensor and sigma (3,n)
     """
 
     # Compute n_l and cache it using internal_stress
     # Be careful about usage though
-    _compute_internal_shear_stretch_stresses_from_model(
-        position_collection,
-        volume,
-        lengths,
-        tangents,
-        radius,
-        rest_lengths,
-        rest_voronoi_lengths,
-        dilatation,
-        voronoi_dilatation,
-        director_collection,
-        sigma,
-        rest_sigma,
-        shear_matrix,
-        internal_stress,
-    )
+    # Quick trick : Instead of evaliation Q(et-d^3), use property that Q*d3 = (0,0,1), a constant
+    z_vector = np.array([0.0, 0.0, 1.0]).reshape(3, -1)
+    sigma[:] = dilatation * _batch_matvec(director_collection, tangents) - z_vector
+    internal_stress[:] = _batch_matvec(shear_matrix, sigma - rest_sigma)
 
     # Signifies Q^T n_L / e
     # Not using batch matvec as I don't want to take directors.T here
@@ -569,14 +504,9 @@ def _compute_internal_torques(
         kappa,
         rest_kappa,
     )
-    # Compute dilatation rate when needed, dilatation itself is done before
-    # in internal_stresses
-    _compute_dilatation_rate(
-        position_collection, velocity_collection, lengths, rest_lengths, dilatation_rate
-    )
 
-    # FIXME: change memory overload instead for the below calls!
     voronoi_dilatation_inv_cube_cached = 1.0 / voronoi_dilatation**3
+
     # Delta(\tau_L / \Epsilon^3)
     bend_twist_couple_2D = difference_kernel_for_block_structure(
         internal_couple * voronoi_dilatation_inv_cube_cached, ghost_voronoi_idx
@@ -594,22 +524,58 @@ def _compute_internal_torques(
         * rest_lengths
     )
 
-    # I apply common sub expression elimination here, as J w / e is used in both the lagrangian and dilatation
-    # terms
-    # TODO : the _batch_matvec kernel needs to depend on the representation of J, and should be coded as such
-    J_omega_upon_e = (
-        _batch_matvec(mass_second_moment_of_inertia, omega_collection) / dilatation
+    blocksize = internal_torques.shape[1]
+    for i in range(3):
+        for k in range(blocksize):
+            internal_torques[i, k] = (
+                bend_twist_couple_2D[i, k]
+                + bend_twist_couple_3D[i, k]
+                + shear_stretch_couple[i, k]
+            )
+
+    return bend_twist_couple_2D, shear_stretch_couple
+
+
+@numba.njit(cache=True)  # type: ignore
+def _compute_internal_torques_without_kappa_update(
+    position_collection: NDArray[np.float64],
+    velocity_collection: NDArray[np.float64],
+    tangents: NDArray[np.float64],
+    lengths: NDArray[np.float64],
+    rest_lengths: NDArray[np.float64],
+    director_collection: NDArray[np.float64],
+    rest_voronoi_lengths: NDArray[np.float64],
+    bend_matrix: NDArray[np.float64],
+    rest_kappa: NDArray[np.float64],
+    kappa: NDArray[np.float64],
+    voronoi_dilatation: NDArray[np.float64],
+    mass_second_moment_of_inertia: NDArray[np.float64],
+    omega_collection: NDArray[np.float64],
+    internal_stress: NDArray[np.float64],
+    internal_couple: NDArray[np.float64],
+    dilatation: NDArray[np.float64],
+    dilatation_rate: NDArray[np.float64],
+    internal_torques: NDArray[np.float64],
+    ghost_voronoi_idx: NDArray[np.int32],
+) -> None:
+    voronoi_dilatation_inv_cube_cached = 1.0 / voronoi_dilatation**3
+
+    # Delta(\tau_L / \Epsilon^3)
+    bend_twist_couple_2D = difference_kernel_for_block_structure(
+        internal_couple * voronoi_dilatation_inv_cube_cached, ghost_voronoi_idx
     )
-
-    # (J \omega_L / e) x \omega_L
-    # Warning : Do not do micro-optimization here : you can ignore dividing by dilatation as we later multiply by it
-    # but this causes confusion and violates SRP
-    lagrangian_transport = _batch_cross(J_omega_upon_e, omega_collection)
-
-    # Note : in the computation of dilatation_rate, there is an optimization opportunity as dilatation rate has
-    # a dilatation-like term in the numerator, which we cancel here
-    # (J \omega_L / e^2) . (de/dt)
-    unsteady_dilatation = J_omega_upon_e * dilatation_rate / dilatation
+    # \mathcal{A}[ (\kappa x \tau_L ) * \hat{D} / \Epsilon^3 ]
+    bend_twist_couple_3D = quadrature_kernel_for_block_structure(
+        _batch_cross(kappa, internal_couple)
+        * rest_voronoi_lengths
+        * voronoi_dilatation_inv_cube_cached,
+        ghost_voronoi_idx,
+    )
+    # (Qt x n_L) * \hat{l}
+    shear_stretch_couple = (
+        _batch_cross(_batch_matvec(director_collection, tangents), internal_stress)
+        * rest_lengths
+    )
 
     blocksize = internal_torques.shape[1]
     for i in range(3):
@@ -618,9 +584,9 @@ def _compute_internal_torques(
                 bend_twist_couple_2D[i, k]
                 + bend_twist_couple_3D[i, k]
                 + shear_stretch_couple[i, k]
-                + lagrangian_transport[i, k]
-                + unsteady_dilatation[i, k]
             )
+
+    return bend_twist_couple_2D, shear_stretch_couple
 
 
 @numba.njit(cache=True)  # type: ignore
