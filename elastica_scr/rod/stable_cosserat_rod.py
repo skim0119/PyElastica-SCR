@@ -31,28 +31,6 @@ class StableCosseratRod(CosseratRod):
 
     REQUISITE_MODULES: list[Type] = []
 
-    def __init__(
-        self,
-        *args: Any,
-        num_gauss_siedel_iteration: int = 500,
-        gauss_siedel_tolerence: float = 1e-6,
-        **kwargs: Any,
-    ) -> None:
-        """
-        The rotation update is done using a stable Gauss-Siedel method.
-
-        Parameters
-        ----------
-        num_gauss_siedel_iteration: int, optional
-            Number of Gauss-Siedel iterations to perform for rotation update. Default is 5.
-        gauss_siedel_tolerence: float, optional
-            Tolerance for Gauss-Siedel convergence. Default is 1e-6.
-
-        """
-        super().__init__(*args, **kwargs)
-        self.num_gauss_siedel_iteration = num_gauss_siedel_iteration
-        self.gauss_siedel_tolerence = gauss_siedel_tolerence
-
     def compute_internal_forces_and_torques(self, time: np.float64) -> None:
         """
         Compute internal forces and torques. We need to compute internal forces and torques before the acceleration because
@@ -201,7 +179,9 @@ class StableCosseratRod(CosseratRod):
 
         A = delh_kron * e3_kron[None, :] + (Ah_kron * de3_kron[None, :]) @ kappa_kron
         reg = 1e-3
-        y = -(T.T.flatten())  # T shape is (3, N_v), and we want to iterate column-wise
+        y = -(
+            (T + self.external_torques).T.flatten()
+        )  # T shape is (3, N_v), and we want to iterate column-wise
 
         m_kron, _, _, _ = np.linalg.lstsq(
             A.T.dot(A) + reg * np.identity(3 * (self.n_elems - 1)), A.T.dot(y)
@@ -308,7 +288,12 @@ class StableCosseratRod(CosseratRod):
         A = delh_kron @ QTS_kron @ eQ_kron @ diff_kron - np.diag(
             np.repeat(self.mass / (dt**2), 3)
         )
-        y = delh_kron @ QTS_kron @ z_kron - dmdtv - dmdt2r
+        y = (
+            delh_kron @ QTS_kron @ z_kron
+            + self.external_forces.T.ravel()
+            - dmdtv
+            - dmdt2r
+        )
 
         r_kron, _, _, _ = np.linalg.lstsq(
             A.T.dot(A) + reg * np.identity(3 * self.n_nodes), A.T.dot(y)
