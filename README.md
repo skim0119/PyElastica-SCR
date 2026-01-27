@@ -14,14 +14,15 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
 - [x] Implement SCR within PyElastica rod.
     - [x] Rotation equation
     - [x] Implicit update for translation
-    - [ ] Incorporate external force and couple
+    - [x] Incorporate external force and couple
     - [ ] Angular velocity and acceleration (not used during stepping, but for user information)
     - [ ] numba optimization
 - [x] Single-rod case without any external force (butterfly)
-- [x] Single-rod cases with general setup
+- [ ] Single-rod cases with general setup
     - [ ] Axial stretching
     - [ ] Catenary
     - [ ] Timoshenko beam
+- [ ] CROEF (CR one-end-fixed) implementation
 
 ## Note on the model
 

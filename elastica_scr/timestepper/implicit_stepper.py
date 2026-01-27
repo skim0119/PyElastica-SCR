@@ -42,49 +42,33 @@ class SCRFirstOrderImplicit:
             The time after the integration step.
 
         """
-        # TODO : Implement
-        # simulation_time = np.float64(time)
-        # simulation_dt = np.float64(dt)
+        simulation_time = np.float64(time)
+        simulation_dt = np.float64(dt)
 
-        # for kin_prefactor, kin_step, dyn_step in self.steps_and_prefactors[:-1]:
-        #     for system in SystemCollection.final_systems():
-        #         kin_step(system, simulation_time, simulation_dt)
+        # Update geometry
+        for system in SystemCollection.final_systems():
+            system.update_geometry()
 
-        #     simulation_time += kin_prefactor(simulation_dt)
+        SystemCollection.synchronize(simulation_time)
 
-        #     # Constrain only values
-        #     SystemCollection.constrain_values(simulation_time)
+        # Quasi-static orientation solve
+        for system in SystemCollection.final_systems():
+            system.update_orientation(time)
+        SystemCollection.constrain_rates(simulation_time)
 
-        #     # We need internal forces and torques because they are used by interaction module.
-        #     for system in SystemCollection.final_systems():
-        #         system.compute_internal_forces_and_torques(simulation_time)
+        # Implicit position and velocity
+        for system in SystemCollection.final_systems():
+            system.update_position_and_velocity(time, dt)
+        SystemCollection.constrain_values(simulation_time)
 
-        #     # Add external forces, controls etc.
-        #     SystemCollection.synchronize(simulation_time)
+        # Call back function, will call the user defined call back functions and store data
+        SystemCollection.apply_callbacks(
+            simulation_time, round(simulation_time / simulation_dt)
+        )
 
-        #     for system in SystemCollection.final_systems():
-        #         dyn_step(system, simulation_time, simulation_dt)
-
-        #     # Constrain only rates
-        #     SystemCollection.constrain_rates(simulation_time)
-
-        # # Peel the last kinematic step and prefactor alone
-        # last_kin_prefactor = self.steps_and_prefactors[-1][0]
-        # last_kin_step = self.steps_and_prefactors[-1][1]
-
-        # for system in SystemCollection.final_systems():
-        #     last_kin_step(system, simulation_time, simulation_dt)
-        # simulation_time += last_kin_prefactor(simulation_dt)
-        # SystemCollection.constrain_values(simulation_time)
-
-        # # Call back function, will call the user defined call back functions and store data
-        # SystemCollection.apply_callbacks(
-        #     simulation_time, round(simulation_time / simulation_dt)
-        # )
-
-        # # Zero out the external forces and torques
-        # for system in SystemCollection.final_systems():
-        #     system.zeroed_out_external_forces_and_torques(simulation_time)
+        # Zero out the external forces and torques
+        for system in SystemCollection.final_systems():
+            system.zeroed_out_external_forces_and_torques(simulation_time)
 
         return time + dt
 
