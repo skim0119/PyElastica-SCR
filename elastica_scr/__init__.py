@@ -1,2 +1,2 @@
-from .rod.stable_cosserat_rod import StableCosseratRod
+from .rod.stable_cosserat_rod import StableCosseratRod, StableCosseratRodWithBC
 from .timestepper.implicit_stepper import SCRFirstOrderImplicit

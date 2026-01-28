@@ -212,7 +212,7 @@ class StableCosseratRod(CosseratRod):
         ).mean()
 
         # print(
-        #    f"kappa residual: {kappa_residual:.7f}, dir diff: {director_difference:.7f}"
+        #     f"kappa residual: {kappa_residual:.7f}, dir diff: {director_difference:.7f}"
         # )
 
         # Update parameters
@@ -273,7 +273,11 @@ class StableCosseratRod(CosseratRod):
                 / self.dilatation[elem_idx]
             )
             eQ_kron[sidx : sidx + 3, sidx : sidx + 3] = (
-                self.director_collection[:, :, elem_idx] * self.dilatation[elem_idx]
+                self.director_collection[:, :, elem_idx]
+                * self.dilatation[elem_idx]
+                / self.lengths[
+                    elem_idx
+                ]  # Can be simplified to just dividing by rest length
             )
         reg = 1e-3
 
@@ -303,16 +307,13 @@ class StableCosseratRodWithBC(StableCosseratRod):
     Experimental rod with handling contraint within the update
     """
 
-    def __init__(
+    def fix(
         self,
-        *args,
         fixed_position_indices: tuple[int] = (),
         fixed_velocity_indices: tuple[int] = (),
         fixed_director_indices: tuple[int] = (),
         fixed_omega_indices: tuple[int] = (),
-        **kwargs,
     ):
-        super().__init__(*args, **kwargs)
         self.fixed_position_indices = set(fixed_position_indices)
         self.fixed_velocity_indices = set(fixed_velocity_indices)
         self.fixed_velocities = np.zeros(
@@ -357,17 +358,21 @@ class StableCosseratRodWithBC(StableCosseratRod):
                 / self.dilatation[elem_idx]
             )
             eQ_kron[sidx : sidx + 3, sidx : sidx + 3] = (
-                self.director_collection[:, :, elem_idx] * self.dilatation[elem_idx]
+                self.director_collection[:, :, elem_idx]
+                * self.dilatation[elem_idx]
+                / self.lengths[elem_idx]
+                # Can be simplified to just dividing by rest length
             )
 
         dmdtv = (self.velocity_collection * (self.mass / dt)[None, :]).T.flatten()
         dmdt2r = (self.position_collection * (self.mass / (dt**2))[None, :]).T.flatten()
+        length_ext = np.repeat(self.lengths, 3)
         A = delh_kron @ QTS_kron @ eQ_kron @ diff_kron - np.diag(
             np.repeat(self.mass / (dt**2), 3)
         )
         y = (
             delh_kron @ QTS_kron @ z_kron
-            + self.external_forces.T.ravel()
+            - self.external_forces.T.ravel()
             - dmdtv
             - dmdt2r
         )
@@ -377,26 +382,36 @@ class StableCosseratRodWithBC(StableCosseratRod):
             list(self.fixed_position_indices) + list(self.fixed_velocity_indices),
             dtype=int,
         )
+        bc_indices_ext = np.repeat(bc_indices * 3, 3)
+        bc_indices_ext[1::3] += 1
+        bc_indices_ext[2::3] += 2
         _boundary_position = self.position_collection[:, bc_indices]
-        _boundary_position[len(self.fixed_position_indices) :] += (
+        _boundary_position[:, len(self.fixed_position_indices) :] += (
             self.fixed_velocities * dt
         )
-        _boundary_moment = A[:, bc_indices] @ _boundary_position
-        y -= _boundary_moment.T.ravel()
-        _boundary_force = np.zeros_like(self.external_forces)
-        A[:, bc_indices] = 0.0
-        A[bc_indices, bc_indices] = -1.0
+        _boundary_moment = A[:, bc_indices_ext] @ _boundary_position.T.ravel()
+        y -= _boundary_moment
+        _boundary_forces = np.zeros_like(self.external_forces)
+        A[:, bc_indices_ext] = 0.0
+        A[bc_indices_ext, bc_indices_ext] = -1.0
 
-        reg = 1e-6
+        reg = 0.0  # 1e-6
         r_kron, _, _, _ = np.linalg.lstsq(
             A.T.dot(A) + reg * np.identity(3 * self.n_nodes), A.T.dot(y)
         )
         position_new = r_kron.reshape(self.n_nodes, 3).T
 
         # Swap BC position and boundary force
-        _boundary_force[:, bc_indices] = position_new[:, bc_indices]
-        position_new[:, bc_indices] = self.position_collection[:, bc_indices]
+        _boundary_forces[:, bc_indices] = position_new[:, bc_indices]
+        position_new[:, bc_indices] = _boundary_position
+
+        # import sys
+
+        # np.set_printoptions(threshold=sys.maxsize)
+        # breakpoint()
 
         self.velocity_collection[:] = (position_new - self.position_collection) / dt
         self.position_collection[:] = position_new
-        self._boundary_force = _boundary_force  # DEBUG: for monitoring reaction force.
+        self._boundary_forces = (
+            _boundary_forces  # DEBUG: for monitoring reaction force.
+        )
