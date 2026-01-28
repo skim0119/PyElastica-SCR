@@ -296,3 +296,107 @@ class StableCosseratRod(CosseratRod):
 
         self.velocity_collection[:] = (position_new - self.position_collection) / dt
         self.position_collection[:] = position_new
+
+
+class StableCosseratRodWithBC(StableCosseratRod):
+    """
+    Experimental rod with handling contraint within the update
+    """
+
+    def __init__(
+        self,
+        *args,
+        fixed_position_indices: tuple[int] = (),
+        fixed_velocity_indices: tuple[int] = (),
+        fixed_director_indices: tuple[int] = (),
+        fixed_omega_indices: tuple[int] = (),
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.fixed_position_indices = set(fixed_position_indices)
+        self.fixed_velocity_indices = set(fixed_velocity_indices)
+        self.fixed_velocities = np.zeros(
+            [3, len(self.fixed_velocity_indices)], dtype=float
+        )  # TODO: Let user set this values. For now, just handle fixed
+        assert not bool(
+            intersection := self.fixed_position_indices & self.fixed_velocity_indices
+        ), (
+            f"Either position or velocity indices can be fixed BC. Cannot be both: {intersection}."
+        )
+        self.fixed_director_indices = set(fixed_director_indices)
+        self.fixed_omega_indices = set(fixed_omega_indices)
+
+        self.num_bc = len(self.fixed_position_indices) + len(
+            self.fixed_velocity_indices
+        )
+
+    def update_position_and_velocity(self, time, dt):
+        delh = np.zeros((self.n_nodes, self.n_elems))
+        np.fill_diagonal(delh, 1)
+        np.fill_diagonal(delh[1:], -1)
+        delh_kron = np.zeros((self.n_nodes * 3, self.n_elems * 3))
+        delh_kron[0::3, 0::3] = delh
+        delh_kron[1::3, 1::3] = delh
+        delh_kron[2::3, 2::3] = delh
+        diff = np.zeros((self.n_elems, self.n_nodes))
+        np.fill_diagonal(diff, -1)
+        np.fill_diagonal(diff[:, 1:], 1)
+        diff_kron = np.zeros((self.n_elems * 3, self.n_nodes * 3))
+        diff_kron[0::3, 0::3] = diff
+        diff_kron[1::3, 1::3] = diff
+        diff_kron[2::3, 2::3] = diff
+        QTS_kron = np.zeros((self.n_elems * 3, self.n_elems * 3))
+        eQ_kron = np.zeros((self.n_elems * 3, self.n_elems * 3))
+        z_kron = np.zeros((self.n_elems * 3))
+        z_kron[2::3] = 1.0
+        for elem_idx in range(self.n_elems):
+            sidx = 3 * elem_idx
+            QTS_kron[sidx : sidx + 3, sidx : sidx + 3] = (
+                self.director_collection[:, :, elem_idx].T
+                @ self.shear_matrix[:, :, elem_idx]
+                / self.dilatation[elem_idx]
+            )
+            eQ_kron[sidx : sidx + 3, sidx : sidx + 3] = (
+                self.director_collection[:, :, elem_idx] * self.dilatation[elem_idx]
+            )
+
+        dmdtv = (self.velocity_collection * (self.mass / dt)[None, :]).T.flatten()
+        dmdt2r = (self.position_collection * (self.mass / (dt**2))[None, :]).T.flatten()
+        A = delh_kron @ QTS_kron @ eQ_kron @ diff_kron - np.diag(
+            np.repeat(self.mass / (dt**2), 3)
+        )
+        y = (
+            delh_kron @ QTS_kron @ z_kron
+            + self.external_forces.T.ravel()
+            - dmdtv
+            - dmdt2r
+        )
+
+        # handles BC
+        bc_indices = np.array(
+            list(self.fixed_position_indices) + list(self.fixed_velocity_indices),
+            dtype=int,
+        )
+        _boundary_position = self.position_collection[:, bc_indices]
+        _boundary_position[len(self.fixed_position_indices) :] += (
+            self.fixed_velocities * dt
+        )
+        _boundary_moment = A[:, bc_indices] @ _boundary_position
+        y -= _boundary_moment.T.ravel()
+        _boundary_force = np.zeros_like(self.external_forces)
+        A[:, bc_indices] = 0.0
+        A[bc_indices, bc_indices] = -1.0
+
+        reg = 1e-6
+        r_kron, _, _, _ = np.linalg.lstsq(
+            A.T.dot(A) + reg * np.identity(3 * self.n_nodes), A.T.dot(y)
+        )
+        position_new = r_kron.reshape(self.n_nodes, 3).T
+
+        # Swap BC position and boundary force
+        _boundary_force[:, bc_indices] = position_new[:, bc_indices]
+        position_new[:, bc_indices] = self.position_collection[:, bc_indices]
+
+        self.velocity_collection[:] = (position_new - self.position_collection) / dt
+        self.position_collection[:] = position_new
+        self._boundary_force = _boundary_force  # DEBUG: for monitoring reaction force.
