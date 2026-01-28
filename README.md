@@ -20,9 +20,12 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
 - [x] Single-rod case without any external force (butterfly)
 - [ ] Single-rod cases with general setup
     - [ ] Axial stretching
-    - [ ] Catenary
+    - [x] Catenary
     - [ ] Timoshenko beam
 - [ ] CROEF (CR one-end-fixed) implementation
+    - [ ] SCR with BC
+        - [x] Position + velocity
+        - [ ] Orientation + angular velocity
 
 ## Note on the model
 
