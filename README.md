@@ -15,8 +15,11 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
     - [x] Rotation equation
     - [x] Implicit update for translation
     - [x] Incorporate external force and couple
-    - [ ] Angular velocity and acceleration (not used during stepping, but for user information)
+    - [x] Angular velocity and acceleration (not used during stepping, but for user information)
+        - Include as part of `update_orientation`
     - [ ] numba optimization
+    - [ ] use solve_banded for solve operations.
+    - [ ] GPU
 - [x] Single-rod case without any external force (butterfly)
 - [ ] Single-rod cases with general setup
     - [ ] Axial stretching
@@ -26,7 +29,12 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
     - [ ] SCR with BC
         - [x] Position + velocity
         - [ ] Orientation + angular velocity
-
+- [ ] Consider block implementation with ghosting (not sure if it beneficial)
+- [ ] Logging
+    - [ ] Residual monitoring
+    - [ ] Reactive forces
+- [ ] Revisit
+    - [ ] SOR iteration for orientation finding: constitutive relation can help
 ## Note on the model
 
 - SCR achieves decouling of linear and angular momentum equation by treating the angular dynamics as quasi-static, which converts solving the orientation equation to be algebraic equation instead of ODE.

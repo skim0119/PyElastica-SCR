@@ -17,7 +17,7 @@ from .equations import (
     _compute_bending_twist_strains,
     _compute_internal_torques_without_kappa_update,
 )
-from .._so3 import exp_so3, hat
+from .._so3 import exp_so3, hat, _compute_relative_rotation
 
 
 class StableCosseratRod(CosseratRod):
@@ -182,33 +182,50 @@ class StableCosseratRod(CosseratRod):
         )
         m = m_kron.reshape(self.n_elems - 1, 3).T
 
-        k = m.copy()
+        import matplotlib.pyplot as plt
+
+        A[A == 0] = np.nan
+        plt.figure()
+        plt.imshow(A, cmap="viridis")
+        plt.title("rotation")
+        plt.colorbar()
+
+        k = m.copy()  # New kappa
         k[0, :] /= self.bend_matrix[0, 0, :]
         k[1, :] /= self.bend_matrix[1, 1, :]
         k[2, :] /= self.bend_matrix[2, 2, :]
 
-        # Find orientation
+        # Find orientation (compatibility solve)
+        # rotation_matrix = _get_rotation_matrix(1.0, prefac * omega_collection)
+        # director_collection[:] = _batch_matmul(rotation_matrix, director_collection)
+
+        # Find orientation (SOR to approach new orientation complying kappa)
         sor = 0.7
-        old_kappa = np.empty_like(self.kappa)
-        old_director = self.director_collection.copy()
+        updated_director = np.empty_like(self.kappa)
+        updated_director = self.director_collection.copy()
         for _ in range(50):
             _compute_bending_twist_strains(
-                old_director,
+                updated_director,
                 self.rest_voronoi_lengths,
-                old_kappa,
+                updated_director,
             )
 
             axes = difference_kernel_for_block_structure(
-                0.5 * (old_kappa + k), self.ghost_voronoi_idx
+                0.5 * (updated_director + k), self.ghost_voronoi_idx
             )
             for nidx in range(self.n_elems):
-                old_director[:, :, nidx] = (
-                    exp_so3(-sor * axes[:, nidx]) @ old_director[:, :, nidx]
+                updated_director[:, :, nidx] = (
+                    exp_so3(-sor * axes[:, nidx]) @ updated_director[:, :, nidx]
                 )
+        updated_omega = (
+            _compute_relative_rotation(self.director_collection, updated_director) / dt
+        )
+        self.alpha_collection[:] = (updated_omega - self.omega_collection) / dt
+        self.omega_collection[:] = updated_omega
 
-        kappa_residual = np.linalg.norm(old_kappa - k, axis=0).mean()
+        kappa_residual = np.linalg.norm(updated_director - k, axis=0).mean()
         director_difference = np.linalg.norm(
-            old_director - self.director_collection, ord="fro", axis=(0, 1)
+            updated_director - self.director_collection, ord="fro", axis=(0, 1)
         ).mean()
 
         # print(
@@ -217,7 +234,7 @@ class StableCosseratRod(CosseratRod):
 
         # Update parameters
         self.kappa[:] = k
-        self.director_collection[:] = old_director
+        self.director_collection[:] = updated_director
         self.internal_couple[:] = m
 
         # Re-evaluation of internal_torques --> supposedly zero
@@ -409,6 +426,14 @@ class StableCosseratRodWithBC(StableCosseratRod):
 
         # np.set_printoptions(threshold=sys.maxsize)
         # breakpoint()
+        import matplotlib.pyplot as plt
+
+        A[A == 0] = np.nan
+        plt.figure()
+        plt.imshow(A, cmap="viridis")
+        plt.title("linear")
+        plt.colorbar()
+        plt.show()
 
         self.velocity_collection[:] = (position_new - self.position_collection) / dt
         self.position_collection[:] = position_new
