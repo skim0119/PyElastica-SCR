@@ -17,15 +17,16 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
     - [x] Incorporate external force and couple
     - [x] Angular velocity and acceleration (not used during stepping, but for user information)
         - Include as part of `update_orientation`
+    - [x] Rotational Dissipation
     - [ ] numba optimization
     - [ ] use solve_banded for solve operations.
     - [ ] GPU
 - [x] Single-rod case without any external force (butterfly)
-- [ ] Single-rod cases with general setup
-    - [ ] Axial stretching
+- [x] Single-rod cases with general setup
+    - [x] Axial stretching
     - [x] Catenary
-    - [ ] Timoshenko beam
-- [ ] CROEF (CR one-end-fixed) implementation
+    - [x] Timoshenko beam
+- [x] CROEF (CR one-end-fixed) implementation
     - [ ] SCR with BC
         - [x] Position + velocity
         - [ ] Orientation + angular velocity
@@ -35,6 +36,16 @@ Experimental plugin of Stable-Cosserat-Rod (SCR) and implicit time-stepping sche
     - [ ] Reactive forces
 - [ ] Revisit
     - [ ] SOR iteration for orientation finding: constitutive relation can help
+
+## Dev note
+
+- Not yet sure what is best way to solve the rotational momentum equation.
+    - How many iteration is needed to converge kappa?
+    - Once some approximation of next-kappa, what is best way to find the next directors?
+    - One-end-fixed BC :: can naturally change the problem from optional physics to integration
+    - Compatibility :: CFL condition and ratio betwee dt and ds becomes critical.
+    - SOR :: numerical iterative update with relaxation factor. Not sure about the convergence criteria even at the extreme case. In general, it doesn't look converging directly.
+
 ## Note on the model
 
 - SCR achieves decouling of linear and angular momentum equation by treating the angular dynamics as quasi-static, which converts solving the orientation equation to be algebraic equation instead of ODE.
